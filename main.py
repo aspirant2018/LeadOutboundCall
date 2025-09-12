@@ -15,13 +15,20 @@ from livekit.agents import (
     cli,
     metrics,
 )
+from livekit import rtc, api
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+import os
 
-logger = logging.getLogger("agent")
+import asyncio
+logger = logging.getLogger("main")
 
 load_dotenv(".env.local")
+def prewarm(proc: JobProcess):
+    proc.userdata["vad"] = silero.VAD.load()
+
+outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
 
 class Assistant(Agent):
@@ -33,106 +40,76 @@ class Assistant(Agent):
             You are curious, friendly, and have a sense of humor.""",
         )
 
-    # all functions annotated with @function_tool will be passed to the LLM when this
-    # agent is active
-    @function_tool
-    async def lookup_weather(self, context: RunContext, location: str):
-        """Use this tool to look up current weather information in the given location.
-
-        If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-
-        Args:
-            location: The location to look up weather information for (e.g. city name)
-        """
-
-        logger.info(f"Looking up weather for {location}")
-
-        return "sunny with a temperature of 70 degrees."
-
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
 
 async def entrypoint(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
+
+
+
+    logger.info(f"connecting to room '{ctx.room.name}'") # room : "my-room"
+    await ctx.connect()
+
+    logger.info(f"room metadata : '{ctx.job.metadata}'") # room metadata : 'hello from dispatch'
+
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all providers at https://docs.livekit.io/agents/integrations/llm/
         llm=openai.LLM(model="gpt-4o-mini"),
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all providers at https://docs.livekit.io/agents/integrations/stt/
         stt=openai.STT(),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all providers at https://docs.livekit.io/agents/integrations/tts/
         tts=openai.TTS(),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
-
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead:
-    # session = AgentSession(
-    #     # See all providers at https://docs.livekit.io/agents/integrations/realtime/
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
-    # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-    # when it's detected, you may resume the agent's speech
-    @session.on("agent_false_interruption")
-    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-        logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
-
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
-    usage_collector = metrics.UsageCollector()
-
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
-
-    ctx.add_shutdown_callback(log_usage)
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/integrations/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/integrations/avatar/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
+    
     # Start the session, which initializes the voice pipeline and warms up the models
-    await session.start(
-        agent=Assistant(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # LiveKit Cloud enhanced noise cancellation
-            # - If self-hosting, omit this parameter
-            # - For telephony applications, use `BVCTelephony` for best results
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
+    # start the session first before dialing, to ensure that when the user picks up
+    # the agent does not miss anything the user says
+    session_started = asyncio.create_task(
+        session.start(
+            agent=Assistant(),
+            room=ctx.room,
+            room_input_options=RoomInputOptions(
+                # enable Krisp background voice and noise removal
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
+        )
     )
 
-    # Join the room and connect to the user
-    await ctx.connect()
+    phone_number = "+33758611523"
+
+    try:
+        await ctx.api.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                room_name=ctx.room.name,
+                sip_trunk_id="ST_HmABTkLetTjG",
+                sip_call_to=phone_number,
+                participant_identity=f'sip_{phone_number}',
+                # function blocks until user answers the call, or if the call fails
+                wait_until_answered=True,
+            )
+        )
+        # wait for the agent session start and participant join
+        await session_started
+        participant = await ctx.wait_for_participant(identity=f'sip_+33758611523')
+        logger.info(f"participant joined: {participant.identity}")
+
+    except api.TwirpError as e:
+        logger.error(
+            f"error creating SIP participant: {e.message}, "
+            f"SIP status: {e.metadata.get('sip_status_code')} "
+            f"{e.metadata.get('sip_status')}"
+        )
+        ctx.shutdown()
+
+
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="my-telephony-agent", prewarm_fnc=prewarm, initialize_process_timeout=60
-))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint,
+                              agent_name="my-telephony-agent",
+                              prewarm_fnc=prewarm,
+                              initialize_process_timeout=60
+                            ))
+    
