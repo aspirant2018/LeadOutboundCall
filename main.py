@@ -14,6 +14,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    get_job_context,
+    ChatContext
 )
 from livekit import rtc, api
 from livekit.agents.llm import function_tool
@@ -29,20 +31,87 @@ def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
+OPENAI_API_KEY = "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"
 
+# Add this function definition anywhere
+async def hangup_call():
+    ctx = get_job_context()
+    if ctx is None:
+        # Not running in a job context
+        return
+    
+    await ctx.api.room.delete_room(
+        api.DeleteRoomRequest(
+            room=ctx.room.name,
+        )
+    )
+from livekit.agents import AgentTask, function_tool
 
-class Assistant(Agent):
-    def __init__(self) -> None:
+class CollectConsent(AgentTask[bool]):
+    def __init__(self, chat_ctx=None):
         super().__init__(
-            instructions="""You are a helpful voice AI assistant.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions="""Your name is Jamie. You are a friendly helper that works with GreenSoler""",
+            chat_ctx=chat_ctx,
         )
 
+        message_to_add = self.chat_ctx.copy()
+        self.update_chat_ctx(message_to_add)
+
+
+
+    async def on_enter(self) -> None:
+        logger.info(f"On enter 'CollectConsent' self. chat context : {self.chat_ctx.to_dict()}")
+
+        await self.session.generate_reply(
+            instructions="""
+            Your name is Jamie, then ask if it is a good time for a quick 2-minutes call.
+            Make it clear that they can decline.
+            """
+        )
+
+    @function_tool
+    async def consent_given(self) -> None:
+        """Use this when the user gives yes as answer."""
+        self.complete(True)
+
+    @function_tool
+    async def consent_denied(self) -> None:
+        """Use this when the user gives no as answer."""
+        self.complete(False)
+
+    
+class Assistant(Agent):
+    def __init__(self):
+        instuctions = """
+        Your name is Jamie. You are a friendly helper that works with GreenSoler
+        1. first question
+        Do you currently own your home, or are you renting?
+        """
+        super().__init__(instructions="")
+
+    async def on_enter(self) -> None:
+        logger.info(f"On enter 'Assistant' chat context : {self.chat_ctx.items}")
+        if await CollectConsent(chat_ctx=self.chat_ctx):
+            await self.session.generate_reply(instructions="Thank the called person and tell him that you have quick question if their services are relevant for called.")
+
+        else:
+            await self.session.say(text="I understand, I won’t keep you. Would you like me to try again at a better time?")
+    
+
+    @function_tool
+    async def call_later(self, ctx: RunContext):
+        """Called when the user wants to be called again"""
+        
+    
+    @function_tool
+    async def end_call(self, ctx: RunContext):
+        """Called when the user wants to end the call"""
+        await ctx.wait_for_playout() # let the agent finish speaking
+        await hangup_call()
+
+            
 
 async def entrypoint(ctx: JobContext):
-
 
 
     logger.info(f"connecting to room '{ctx.room.name}'") # room : "my-room"
@@ -55,9 +124,9 @@ async def entrypoint(ctx: JobContext):
     }
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=openai.STT(),
-        tts=openai.TTS(),
+        llm=openai.LLM(model="gpt-4o-mini",api_key=OPENAI_API_KEY),
+        stt=openai.STT(api_key=OPENAI_API_KEY),
+        tts=openai.TTS(api_key=OPENAI_API_KEY),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
