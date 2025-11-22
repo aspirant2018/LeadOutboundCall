@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "livekit-agents[cartesia,deepgram,openai,silero,turn-detector]~=1.2",
+    "livekit-agents[cartesia,deepgram,elevenlabs,openai,silero,turn-detector]~=1.2",
     "livekit-plugins-noise-cancellation~=0.2",
+    "pydantic[email]>=2.11.7",
     "python-dotenv>=1.1.1",
+    "telnyx>=3.12.1",
     "torch>=2.8.0",
 ]
