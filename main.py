@@ -39,6 +39,9 @@ from zoneinfo import ZoneInfo
 from livekit import api
 from livekit.protocol.sip import SIPCallInfo
 from agent import Assistant
+from classes import UserData, MetaData
+from utils import post_data
+
 logger = logging.getLogger("main")
 
 load_dotenv("/home/raymond/Projects/LeadOutbountCaller/.env.local")
@@ -48,27 +51,6 @@ outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
-
-
-@dataclass
-class UserData:
-    is_availale: bool = None
-    date: str = None
-    time: str = None
-
-
-@dataclass
-class MetaData:
-    call_id: str = None
-    created_at: str  = None
-    ended_at: str = None
-    from_number : str = None
-    to_number: str = None
-    call_type: str = None
-    duration_seconds: float = None
-    disconnection_reason: str = None
-
-
 
 async def entrypoint(ctx: JobContext):
 
@@ -117,15 +99,11 @@ async def entrypoint(ctx: JobContext):
 
         logger.info(f"Metadata dict: {asdict(metadata)}")
 
-        # Send data to backend APi asynchronously        
-        async def post_data():
-            async with aiohttp.ClientSession() as session:
-                
-                async with session.post("http://0.0.0.0:8000/calls/call", json=asdict(metadata)) as response:
-                    return await response.json()
+
+        url_api = os.getenv('url_api',"http://3.88.182.81:8000/calls/call")
                 
         # If you need the result, use ensure_future with callback
-        task = asyncio.create_task(post_data())
+        task = asyncio.create_task(post_data(url=url_api,metadata=metadata))
         task.add_done_callback(lambda t: logger.info(f"Result from API: {t.result()}"))
 
     await session.start(
