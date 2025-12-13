@@ -54,11 +54,16 @@ async def hangup_call():
         )
     )
 
-class Assistant(Agent):
+# Next 
+# Defining 2 agents: one for inbound calls, one for outbound calls
+# Both agents share the same behavior, but the greeting message is different and inbound agent does not have the answering machine tool
+
+            
+
+class InboundAssistant(Agent):
     def __init__(self, call_type:str, url_api: str = NOT_GIVEN):
         instuctions = f"""
         La data et l'heure actuel: {datetime.now().isoformat()}.
-        Le type de l'appel est : {call_type}
         # Identité de l'agent:
         Tu es la voix officielle de Mazia, une agence spécialisée dans la création, l’intégration et le déploiement des agents vocaux téléphoniques sur mesure pour les entreprises.
         # Tes objectifs principaux:
@@ -89,8 +94,6 @@ class Assistant(Agent):
 
 
         ## Pour les appels sortants:
-
-
         - présenter Mazia de manière professionnelle, chaleureuse et rassurante,
         - expliquer la valeur ajoutée de nos callbots,
         - mettre en avant notre approche personnalisée et orientée résultat,
@@ -104,33 +107,46 @@ class Assistant(Agent):
         4. Ne jamais sortir de ton rôle de représentante officielle de Mazia.
         5. Ton ton doit être : professionnel, moderne, confiant et convivial.
 
-        Tu es prête à présenter Mazia et à expliquer notre expertise en callbots personnalisés.
+        Tu es prête à présenter Mazia et à expliquer notre expertise en agents IA téléphoniques  personnalisés.
+
+        # Output rules:
+        - Tu échanges avec l’utilisateur par la voix, et tu dois appliquer les règles suivantes pour que ta réponse sonne naturelle dans un système de synthèse vocale :
+        - Réponds uniquement en texte simple. N’utilise jamais de JSON, de markdown, de listes, de tableaux, de code, d’émoticônes ou tout autre format complexe.
+        - Garde les réponses courtes par défaut : une à trois phrases. Pose une seule question à la fois.
+        - Épelle les nombres, les numéros de téléphone ou les adresses courriel.
+        - Supprime la partie 'https://' et tout autre format si tu dois mentionner une adresse web.
+        - Évite les sigles et les mots difficiles à prononcer lorsque c’est possible.
+
+        # Règles de sécurité :
+        - Reste dans un usage sûr, légal et approprié ; refuse les demandes dangereuses ou hors sujet.
+        - Pour les sujets médicaux, juridiques ou financiers, donne seulement des informations générales et conseille de consulter un professionnel qualifié.
+        - Protège la vie privée et limite les données sensibles.
         """
+        self.call_type = call_type
         self.transcripts = []
         self.url_api = url_api
         self.conversation_items = []
         #self.tools = None
 
-        super().__init__(instructions=instuctions)
+        super().__init__(instructions=instuctions,)
 
     async def on_enter(self) -> None:
-        await self.session.say(
-            text="Bonjour, c’est Linda de Mazia. Merci pour votre intérêt ! J’aimerais comprendre vos besoins pour voir comment notre solution peut vous aider. Est-ce que vous avez une minute ?",
-            allow_interruptions=True,
-            add_to_chat_ctx=True,
+        """Greet the caller based on call type when the session starts"""
+
+        if self.call_type == "outbound":  # OUTBOUND
+            await self.session.say(
+                text="Bonjour, c’est Linda de Mazia. Merci pour votre intérêt ! J’aimerais comprendre vos besoins pour voir comment notre solution peut vous aider. Est-ce que vous avez une minute ?",
+                add_to_chat_ctx=True,
+                allow_interruptions=False,
+                )
+        else: 
+            await self.session.say(
+                text="Bonjour, c’est Linda de Mazia. Comment puis-je vous aider aujourd’hui ?",
+                add_to_chat_ctx=True,
+                allow_interruptions=False,
             )
         # Set up event listeners
-        # add transcript listener
-        @self.session.on("user_input_transcribed")  
-        def on_transcript(transcript):  
-            if transcript.is_final:  
-                self.transcripts.append({  
-                    "text": transcript.transcript,  
-                    "timestamp": transcript.created_at,  
-                    "role": "user",
-                    "language": transcript.language
-                })  
-                  
+        # add transcript listener  
         # Add conversation item listener
         @self.session.on("conversation_item_added")
         def on_conversation_item_added(item):
@@ -138,16 +154,20 @@ class Assistant(Agent):
             self.conversation_items.append(item)
         
 
-        # 
         @self.session.on("metrics_collected")
         def on_metrics_collected(ev: MetricsCollectedEvent):
-            logger.info(f"Metrics collected: {ev.metrics}")
+            #logger.info(f"Metrics collected: {ev.metrics}")
+            pass
             
-            
+        @self.session.on("speech_created")
+        def on_speech_created(speech):
+            logger.info(f"Speech created: {speech.text}")
 
         @self.session.on("close")
         def on_close(ev: CloseEvent):
+            logger.info(f"Session is closing {ev}")
             logger.info(f"Type of disconnection: {ev.reason}")
+            
             self.disconnect_reason = ev.reason.name  
             logger.info(f"Agent disconnect reason {self.disconnect_reason}")
         
@@ -156,9 +176,8 @@ class Assistant(Agent):
             logger.info(f"Function tools executed: {tools}")
             self.tools.append(tools)
             
-
     async def on_exit(self) -> None:
-        """Called when session is closing - send transcriptions to API"""
+        """send transcripts to API on session exit"""
         logger.info("Session is exiting, sending transcripts to API")
         await self._send_transcripts_to_api() 
 
@@ -175,7 +194,7 @@ class Assistant(Agent):
 
         # Later
         #tools_executed: str | None = None
-        #is_voice_mail_detected: bool | None = None
+        #is_voice_mail_detected: bool | None = Nuserdata.disconnection_reason if userdata.disconnection_reason else "UNKNOWN",one
 
     async def _send_transcripts_to_api(self):
         """Sends the call transcripts to an external API endpoint"""
@@ -184,18 +203,20 @@ class Assistant(Agent):
         logger.info(f"Job metadata: {userdata}")
 
         if not self.conversation_items:
-            logger.info("No transcripts to send.")
-            return
-        
-        transcibed_texts = ""
-        for message in self.conversation_items:
-            logger.info(f"Processing conversation item: {message.item}")
-            role = "AGENT" if message.item.role == "assistant" else "USER"
-            timestamp = message.item.created_at
-            text = message.item.content[-1]
-            transcibed_texts += f"[{timestamp}] {role}: {text}\n"
-            logger.info(f"Appended to transcript: [{timestamp}] {role}: {text}")
-        
+            # Sometimes there are no conversation items if the callee did not talk at all
+            logger.info(f"Number of conversation items to process: 0")
+            transcibed_texts = "No conversation items were recorded."
+ 
+        else:
+            logger.info(f"Number of conversation items to process: {len(self.conversation_items)}")
+            transcibed_texts = ""
+            for message in self.conversation_items:
+                logger.info(f"Processing conversation item: {message.item}")
+                role = "AGENT" if message.item.role == "assistant" else "USER"
+                timestamp = message.item.created_at
+                text = message.item.content[-1]
+                transcibed_texts += f"'{timestamp}' {role}: {text}\n"
+            
         payload = {  
             "room_name": userdata.room_name,
             "transcription": transcibed_texts,
@@ -220,12 +241,12 @@ class Assistant(Agent):
             print(f"Error sending transcripts to API: {e}")  
 
     
-    # only used for outbound calls
+    # Only used for outbound calls
     @function_tool
     async def detected_answering_machine(self):
         """Call this tool if you have detected a voicemail system, AFTER hearing the voicemail greeting"""
         await self.session.say(
-            text="Bonjour, c’est Linda de Mazia. Je vous contacte pour vous présenter nos solutions de callbots personnalisés qui peuvent grandement améliorer l’efficacité de votre service client. N’hésitez pas à nous rappeler au 01 23 45 67 89 pour en savoir plus. Merci et bonne journée!",
+            text="Bonjour, c’est Linda de Mazia. Je vous contacte pour vous présenter nos solutions des agents vocaux téléphoniques  personnalisés qui peuvent grandement améliorer l’efficacité de votre service client. N’hésitez pas à nous rappeler au 01 23 45 67 89 pour en savoir plus. Merci et bonne journée!",
             add_to_chat_ctx=True,
         )
         await asyncio.sleep(0.5) # Add a natural gap to the end of the voicemail message
@@ -249,6 +270,8 @@ class Assistant(Agent):
     async def store_schedule_appointment(self, date: str, time: str):
         """Call this tool to store the appointment date and time when the user provides it"""
         logger.info(f"Storing appointment for date: {date}, time: {time}")
+        # Add API calendy
+
         await self.session.say(
             text=f"Merci. J'ai bien noté votre rendez-vous. Est-ce que vous avez une autre question?!.",
             add_to_chat_ctx=True,

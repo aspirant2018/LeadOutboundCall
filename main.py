@@ -38,7 +38,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from livekit import api
 from livekit.protocol.sip import SIPCallInfo
-from agent import Assistant
+from inbound_agent import InboundAssistant
+from outbound_agent import OutboundAssistant
 from classes import UserData, MetaData
 from utils import post_data
 
@@ -56,17 +57,26 @@ async def entrypoint(ctx: JobContext):
 
     userdata = UserData()
     metadata = MetaData()
-    #lkapi = None  
-    #egress_info = None
-
     
     logger.info(f"connecting to room '{ctx.room.name}'") # room : "my-room"
     userdata.room_name = ctx.room.name
-    logger.info(f"room metadata : '{ctx.job.metadata}'") # room metadata : 'hello from dispatch'
+    logger.info(f"room metadata : '{ctx.job.metadata}'") # Room from dispatch metadata : 'hello from dispatch'
+
+    # Convert text to json
+
+    metadata = json.loads(ctx.job.metadata)
 
     # Determine if this is an outbound call from dispatch metadata  
-    call_type = ctx.job.metadata
+    call_type = metadata.get("call_type")
+    data = metadata.get("data")
+    
     logger.info(f"Call type: {call_type}")   # Type dict
+    logger.info(f"data sent from backend: {data}")
+
+
+
+
+
 
     # Change instruction based on call type
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -84,46 +94,22 @@ async def entrypoint(ctx: JobContext):
         userdata = userdata
     )
 
-    
-
-    #@session.on("close")
-    #def on_close(ev: CloseEvent):
-
-    #    logger.info(f"Type of disconnection: {ev.reason}")
-    #    logger.info(f"Agent disconnect reason {ctx.agent.disconnect_reason}")
-    #    logger.info(f"Room '{ctx.room.name}' closed. Preparing to send metadata.")
-
-
-    #    conversation = session.history.to_dict()
-    #    logger.info(f"Type of conversation object: {type(conversation)}")
-    #    logger.info(f"Conversation history length: {len(conversation)}")
-    #    print("")
-    #    logger.info(f"Conversation history: {conversation}")
-        
-    #    metadata.room_name = ctx.room.name
-
-        #started_at = ctx.room.creation_time.astimezone(tz=ZoneInfo("Europe/Paris"))
-    #    ended_at = datetime.fromtimestamp(ev.created_at, tz=ZoneInfo("Europe/Paris"))
-
-        # Metadata
-    #    metadata.disconnection_reason = ev.reason.name
-    #    metadata.ended_at = ended_at.isoformat()
-
-    #    logger.info(f"Metadata dict: {asdict(metadata)}")
+    if call_type == "outbound":
+        agent = OutboundAssistant(url_api="www.ghhtt.com",
+                                 fname=data.get("first_name"),
+                                 lname=data.get("last_name"),
+                                 email=data.get("email"),
+                                 phone_number=data.get("email")
+                                 )
+    elif call_type == "inbound":
+        agent = InboundAssistant(call_type=call_type,url_api="www.ghhtt.com")
+    else:
+        logger.info(f"Check againg the call type: {call_type}")
 
 
-    #    url_api = os.getenv('url_api',"http://3.88.182.81:8000/calls/call")
-    #    url_api = "https://8b87972dd62d.ngrok-free.app/calls/call"
-                
-        # If you need the result, use ensure_future with callback
-        # result = post_data(url=url_api,metadata=metadata)
-        # asyncio.create_task(post_data(url=url_api,metadata=metadata))
-        
 
     await session.start(
-            agent=Assistant(call_type=call_type,
-                            url_api="https://2fe20fb8f1f2.ngrok-free.app/calls/call"
-                            ),
+            agent=agent,
             room=ctx.room,
             room_input_options=RoomInputOptions(
                 noise_cancellation=noise_cancellation.BVCTelephony(),
