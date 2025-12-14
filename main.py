@@ -17,6 +17,9 @@ from livekit.agents import (
     get_job_context,
     ChatContext,
     CloseEvent,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip
     
 )
 from livekit import rtc, api
@@ -63,20 +66,17 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"room metadata : '{ctx.job.metadata}'") # Room from dispatch metadata : 'hello from dispatch'
 
     # Convert text to json
+    if ctx.job.metadata:
+        metadata = json.loads(ctx.job.metadata)
 
-    metadata = json.loads(ctx.job.metadata)
-
-    # Determine if this is an outbound call from dispatch metadata  
-    call_type = metadata.get("call_type")
-    data = metadata.get("data")
+        # Determine if this is an outbound call from dispatch metadata  
+        call_type = metadata.get("call_type")
+        data = metadata.get("data")
+        
+        logger.info(f"Call type: {call_type}")   # Type dict
+        logger.info(f"data sent from backend: {data}")
     
-    logger.info(f"Call type: {call_type}")   # Type dict
-    logger.info(f"data sent from backend: {data}")
-
-
-
-
-
+    call_type = "inbound"
 
     # Change instruction based on call type
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -95,18 +95,16 @@ async def entrypoint(ctx: JobContext):
     )
 
     if call_type == "outbound":
-        agent = OutboundAssistant(url_api="www.ghhtt.com",
+        agent = OutboundAssistant(url_api="http://3.88.182.81:8000/calls/call",
                                  fname=data.get("first_name"),
                                  lname=data.get("last_name"),
                                  email=data.get("email"),
                                  phone_number=data.get("email")
                                  )
     elif call_type == "inbound":
-        agent = InboundAssistant(call_type=call_type,url_api="www.ghhtt.com")
+        agent = InboundAssistant(call_type="inbound",url_api="http://3.88.182.81:8000/calls/call")
     else:
         logger.info(f"Check againg the call type: {call_type}")
-
-
 
     await session.start(
             agent=agent,
@@ -115,7 +113,18 @@ async def entrypoint(ctx: JobContext):
                 noise_cancellation=noise_cancellation.BVCTelephony(),
             ),
         )
-    
+    background_audio = BackgroundAudioPlayer(
+        # play office ambience sound looping in the background
+        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.8),
+        # play keyboard typing sound when the agent is thinking
+        thinking_sound=[
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.8),
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.7),
+        ],
+    )
+
+    await background_audio.start(room=ctx.room, agent_session=session)
+
         
     # Handler for participant connection  
     def on_participant_connected_handler(participant: rtc.RemoteParticipant):  

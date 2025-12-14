@@ -133,14 +133,7 @@ class InboundAssistant(Agent):
     async def on_enter(self) -> None:
         """Greet the caller based on call type when the session starts"""
 
-        if self.call_type == "outbound":  # OUTBOUND
-            await self.session.say(
-                text="Bonjour, c’est Linda de Mazia. Merci pour votre intérêt ! J’aimerais comprendre vos besoins pour voir comment notre solution peut vous aider. Est-ce que vous avez une minute ?",
-                add_to_chat_ctx=True,
-                allow_interruptions=False,
-                )
-        else: 
-            await self.session.say(
+        await self.session.say(
                 text="Bonjour, c’est Linda de Mazia. Comment puis-je vous aider aujourd’hui ?",
                 add_to_chat_ctx=True,
                 allow_interruptions=False,
@@ -271,6 +264,12 @@ class InboundAssistant(Agent):
         """Call this tool to store the appointment date and time when the user provides it"""
         logger.info(f"Storing appointment for date: {date}, time: {time}")
         # Add API calendy
+
+
+        logger.info("FakeWebSearchAgent thinking...")
+        await asyncio.sleep(5)
+
+        
 
         await self.session.say(
             text=f"Merci. J'ai bien noté votre rendez-vous. Est-ce que vous avez une autre question?!.",
